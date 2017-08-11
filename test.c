@@ -94,13 +94,7 @@ static void test_request(void)
     ok(headers[2].name == NULL);
     ok(bufis(headers[2].value, headers[2].value_len, "  \tc"));
 
-    PARSE("GET / HTTP/1.0\r\nfoo : ab\r\n\r\n", 0, 0, "parse header name with trailing space");
-    ok(num_headers == 1);
-    ok(bufis(method, method_len, "GET"));
-    ok(bufis(path, path_len, "/"));
-    ok(minor_version == 0);
-    ok(bufis(headers[0].name, headers[0].name_len, "foo "));
-    ok(bufis(headers[0].value, headers[0].value_len, "ab"));
+    PARSE("GET / HTTP/1.0\r\nfoo : ab\r\n\r\n", 0, -1, "parse header name with trailing space");
 
     PARSE("GET", 0, -2, "incomplete 1");
     ok(method == NULL);
@@ -130,6 +124,7 @@ static void test_request(void)
     PARSE("GET / HTTP/1.0\r\nab: c\0d\r\n\r\n", 0, -1, "NUL in header value");
     PARSE("GET / HTTP/1.0\r\na\033b: c\r\n\r\n", 0, -1, "CTL in header name");
     PARSE("GET / HTTP/1.0\r\nab: c\033\r\n\r\n", 0, -1, "CTL in header value");
+    PARSE("GET / HTTP/1.0\r\n/: 1\r\n\r\n", 0, -1, "invalid char in header value");
     PARSE("GET /\xa0 HTTP/1.0\r\nh: c\xa2y\r\n\r\n", 0, 0, "accept MSB chars");
     ok(num_headers == 1);
     ok(bufis(method, method_len, "GET"));
@@ -137,6 +132,13 @@ static void test_request(void)
     ok(minor_version == 0);
     ok(bufis(headers[0].name, headers[0].name_len, "h"));
     ok(bufis(headers[0].value, headers[0].value_len, "c\xa2y"));
+
+    PARSE("GET / HTTP/1.0\r\n\x7c\x7e: 1\r\n\r\n", 0, 0, "accept |~ (though forbidden by SSE)");
+    ok(num_headers == 1);
+    ok(bufis(headers[0].name, headers[0].name_len, "\x7c\x7e"));
+    ok(bufis(headers[0].value, headers[0].value_len, "1"));
+
+    PARSE("GET / HTTP/1.0\r\n\x7b: 1\r\n\r\n", 0, -1, "disallow {");
 
 #undef PARSE
 }
@@ -161,7 +163,7 @@ static void test_response(void)
     PARSE("HTTP/1.0 200 OK\r\n\r\n", 0, 0, "simple");
     ok(num_headers == 0);
     ok(status == 200);
-    ok(minor_version = 1);
+    ok(minor_version == 0);
     ok(bufis(msg, msg_len, "OK"));
 
     PARSE("HTTP/1.0 200 OK\r\n\r", 0, -2, "partial");
@@ -312,7 +314,7 @@ static void test_chunked_per_byte(int line, int consume_trailer, const char *enc
         ret = phr_decode_chunked(&dec, buf + bytes_ready, &bufsz);
         if (ret != -2) {
             ok(0);
-            return;
+            goto cleanup;
         }
         bytes_ready += bufsz;
     }
@@ -330,6 +332,7 @@ static void test_chunked_per_byte(int line, int consume_trailer, const char *enc
             ok(0);
     }
 
+cleanup:
     free(buf);
 }
 
@@ -353,16 +356,17 @@ static void test_chunked_failure(int line, const char *encoded, ssize_t expected
         ret = phr_decode_chunked(&dec, buf, &bufsz);
         if (ret == -1) {
             ok(ret == expected);
-            return;
+            goto cleanup;
         } else if (ret == -2) {
             /* continue */
         } else {
             ok(0);
-            return;
+            goto cleanup;
         }
     }
     ok(ret == expected);
 
+cleanup:
     free(buf);
 }
 
